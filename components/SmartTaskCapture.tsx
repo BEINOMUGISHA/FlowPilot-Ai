@@ -39,7 +39,6 @@ export const SmartTaskCapture: React.FC<SmartTaskCaptureProps> = ({ onTaskAdded 
   
   // Data Buffers Refs
   const dataArrayTimeRef = useRef<Uint8Array | null>(null);
-  const dataArrayFreqRef = useRef<Uint8Array | null>(null);
 
   // VAD & Timer Refs
   const silenceStartRef = useRef<number | null>(null);
@@ -102,8 +101,6 @@ export const SmartTaskCapture: React.FC<SmartTaskCaptureProps> = ({ onTaskAdded 
     silenceStartRef.current = null;
     recordingStartRef.current = null;
     silenceDetectedRef.current = false;
-    // Don't nullify mediaRecorderRef here immediately as onstop needs it, 
-    // but onstop runs after stop(), so it's usually fine. 
   };
 
   const drawVisualizer = () => {
@@ -227,7 +224,6 @@ export const SmartTaskCapture: React.FC<SmartTaskCaptureProps> = ({ onTaskAdded 
       analyserRef.current = analyser;
       
       dataArrayTimeRef.current = new Uint8Array(analyser.frequencyBinCount);
-      dataArrayFreqRef.current = new Uint8Array(analyser.frequencyBinCount);
       
       const source = audioContext.createMediaStreamSource(stream);
       source.connect(analyser);
