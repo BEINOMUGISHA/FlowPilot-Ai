@@ -36,6 +36,7 @@ export const SmartTaskCapture: React.FC<SmartTaskCaptureProps> = ({ onTaskAdded 
   const animationFrameRef = useRef<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const micButtonRef = useRef<HTMLButtonElement>(null);
   
   // Data Buffers Refs
   const dataArrayTimeRef = useRef<Uint8Array | null>(null);
@@ -86,6 +87,12 @@ export const SmartTaskCapture: React.FC<SmartTaskCaptureProps> = ({ onTaskAdded 
       setIsRecording(false);
       setSilenceDetected(false);
     }
+    
+    // Reset visual indicators
+    if (micButtonRef.current) {
+      micButtonRef.current.style.boxShadow = '';
+      micButtonRef.current.style.transform = '';
+    }
 
     // 5. Clear Timers & Animation
     if (timerIntervalRef.current) {
@@ -132,6 +139,18 @@ export const SmartTaskCapture: React.FC<SmartTaskCaptureProps> = ({ onTaskAdded 
         sumSquares += normalized * normalized;
       }
       const rms = Math.sqrt(sumSquares / bufferLength);
+      
+      // Update Mic Button Visual (Pulse based on volume)
+      if (micButtonRef.current) {
+         // Amplify RMS for visual effect (RMS for speech is typically low, e.g., 0.01-0.1)
+         const visualLevel = Math.min(rms * 8, 1); 
+         const ringSize = 4 + (visualLevel * 12); // Base 4px, expand to 16px
+         const ringOpacity = 0.2 + (visualLevel * 0.5); // Fade in opacity
+         const scale = 1.1 + (visualLevel * 0.15); // Slight scale up
+
+         micButtonRef.current.style.boxShadow = `0 0 0 ${ringSize}px rgba(239, 68, 68, ${ringOpacity})`;
+         micButtonRef.current.style.transform = `scale(${scale})`;
+      }
 
       if (recordingDuration >= MAX_DURATION_MS) {
         stopRecording();
@@ -493,9 +512,10 @@ export const SmartTaskCapture: React.FC<SmartTaskCaptureProps> = ({ onTaskAdded 
           
           <div className="flex items-center space-x-3 ml-2">
             <button
+              ref={micButtonRef}
               type="button"
               className={`
-                p-3 rounded-full transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2
+                p-3 rounded-full transition-all duration-100 focus:outline-none focus:ring-2 focus:ring-offset-2 z-10
                 ${isRecording 
                   ? 'text-white bg-red-500 hover:bg-red-600 shadow-lg shadow-red-200 ring-2 ring-red-100 scale-110' 
                   : 'text-slate-500 hover:text-indigo-600 hover:bg-indigo-50'}

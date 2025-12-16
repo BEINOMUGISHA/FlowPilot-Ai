@@ -1,141 +1,165 @@
 
+import { supabase } from './supabaseClient';
 import { Task, AutomationRule, AppNotification } from '../types';
 
-export const INITIAL_TASKS: Task[] = [
-  {
-    id: '1',
-    title: 'Review quarterly financial report',
-    status: 'pending',
-    priority: 'high',
-    dueDate: new Date(Date.now() + 86400000).toISOString(),
-    category: 'Finance',
-    source: 'email',
-    aiConfidence: 0.95,
-    assignedTo: 'u1'
-  },
-  {
-    id: '2',
-    title: 'Call Sarah about the marketing assets',
-    status: 'pending',
-    priority: 'medium',
-    dueDate: new Date().toISOString(),
-    category: 'Marketing',
-    source: 'voice',
-    aiConfidence: 0.88,
-    assignedTo: 'u2'
-  },
-  {
-    id: '3',
-    title: 'Update software license keys',
-    status: 'completed',
-    priority: 'low',
-    dueDate: new Date(Date.now() - 86400000).toISOString(),
-    category: 'IT',
-    source: 'manual',
-    aiConfidence: 1.0,
-    assignedTo: 'u1'
-  }
-];
+// Mappers to convert between App types (camelCase) and DB columns (snake_case)
 
-export const INITIAL_AUTOMATIONS: AutomationRule[] = [
-  {
-    id: '1',
-    name: 'Urgent Client Tasks',
-    description: 'Mark tasks with "Client" as High Priority',
-    triggerType: 'KEYWORD_MATCH',
-    triggerCondition: 'Client',
-    actionType: 'SET_PRIORITY',
-    actionTarget: 'high',
-    active: true,
-    executionCount: 12,
-    lastRun: new Date(Date.now() - 86400000).toISOString()
-  },
-  {
-    id: '2',
-    name: 'Overdue Watchdog',
-    description: 'Notify me when tasks are overdue',
-    triggerType: 'ON_OVERDUE',
-    actionType: 'NOTIFY',
-    actionTarget: 'You have overdue tasks pending review.',
-    active: true,
-    executionCount: 5
-  },
-  {
-    id: '3',
-    name: 'Celebrate Wins',
-    description: 'Send a notification when a task is completed',
-    triggerType: 'ON_COMPLETE',
-    actionType: 'NOTIFY',
-    actionTarget: 'Great job completing a task! 🚀',
-    active: true,
-    executionCount: 45
-  }
-];
+const mapTaskFromDB = (t: any): Task => ({
+  id: t.id,
+  title: t.title,
+  status: t.status,
+  priority: t.priority,
+  dueDate: t.due_date,
+  category: t.category,
+  source: t.source,
+  description: t.description,
+  aiConfidence: t.ai_confidence,
+  assignedTo: t.assigned_to
+});
 
-export const INITIAL_NOTIFICATIONS: AppNotification[] = [
-  { 
-    id: '1', 
-    type: 'email', 
-    source: 'Gmail', 
-    title: 'New Contract Proposal', 
-    message: 'Attached is the revised contract for Q4...', 
-    timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(), 
-    read: false, 
-    priority: 'high' 
-  },
-  { 
-    id: '2', 
-    type: 'social', 
-    source: 'Slack', 
-    title: 'Mention in #general', 
-    message: 'Sarah: @Alex did you see the latest metrics?', 
-    timestamp: new Date(Date.now() - 1000 * 60 * 45).toISOString(), 
-    read: false 
-  },
-  { 
-    id: '3', 
-    type: 'system', 
-    source: 'System', 
-    title: 'Update Available', 
-    message: 'FlowPilot v2.1 is ready to install.', 
-    timestamp: new Date(Date.now() - 1000 * 60 * 300).toISOString(), 
-    read: false 
-  }
-];
+const mapTaskToDB = (t: Partial<Task>, userId: string) => ({
+  id: t.id,
+  title: t.title,
+  status: t.status,
+  priority: t.priority,
+  due_date: t.dueDate,
+  category: t.category,
+  source: t.source,
+  description: t.description,
+  ai_confidence: t.aiConfidence,
+  assigned_to: t.assignedTo,
+  user_id: userId
+});
+
+const mapAutomationFromDB = (a: any): AutomationRule => ({
+  id: a.id,
+  name: a.name,
+  description: a.description,
+  triggerType: a.trigger_type,
+  triggerCondition: a.trigger_condition,
+  actionType: a.action_type,
+  actionTarget: a.action_target,
+  active: a.active,
+  lastRun: a.last_run,
+  executionCount: a.execution_count
+});
+
+const mapAutomationToDB = (a: Partial<AutomationRule>, userId: string) => ({
+  id: a.id,
+  name: a.name,
+  description: a.description,
+  trigger_type: a.triggerType,
+  trigger_condition: a.triggerCondition,
+  action_type: a.actionType,
+  action_target: a.actionTarget,
+  active: a.active,
+  last_run: a.lastRun,
+  execution_count: a.executionCount,
+  user_id: userId
+});
+
+const mapNotificationFromDB = (n: any): AppNotification => ({
+  id: n.id,
+  type: n.type,
+  source: n.source,
+  title: n.title,
+  message: n.message,
+  timestamp: n.timestamp,
+  read: n.read,
+  priority: n.priority
+});
+
+const mapNotificationToDB = (n: Partial<AppNotification>, userId: string) => ({
+  id: n.id,
+  type: n.type,
+  source: n.source,
+  title: n.title,
+  message: n.message,
+  timestamp: n.timestamp,
+  read: n.read,
+  priority: n.priority,
+  user_id: userId
+});
+
+// --- API Service ---
 
 export const DB = {
   tasks: {
-    load: (): Task[] => {
-      try {
-        const saved = localStorage.getItem('flowpilot_tasks');
-        return saved ? JSON.parse(saved) : INITIAL_TASKS;
-      } catch (e) {
-        console.error("Failed to load tasks", e);
-        return INITIAL_TASKS;
-      }
+    fetchAll: async (userId: string): Promise<Task[]> => {
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+        
+      if (error) throw error;
+      return (data || []).map(mapTaskFromDB);
     },
-    save: (tasks: Task[]) => localStorage.setItem('flowpilot_tasks', JSON.stringify(tasks))
+    create: async (task: Task, userId: string) => {
+      const { error } = await supabase.from('tasks').insert(mapTaskToDB(task, userId));
+      if (error) throw error;
+    },
+    update: async (task: Task, userId: string) => {
+      const { error } = await supabase
+        .from('tasks')
+        .update(mapTaskToDB(task, userId))
+        .eq('id', task.id);
+      if (error) throw error;
+    },
+    delete: async (id: string) => {
+      const { error } = await supabase.from('tasks').delete().eq('id', id);
+      if (error) throw error;
+    }
   },
+
   automations: {
-    load: (): AutomationRule[] => {
-      try {
-        const saved = localStorage.getItem('flowpilot_automations');
-        return saved ? JSON.parse(saved) : INITIAL_AUTOMATIONS;
-      } catch (e) {
-        return INITIAL_AUTOMATIONS;
-      }
+    fetchAll: async (userId: string): Promise<AutomationRule[]> => {
+      const { data, error } = await supabase
+        .from('automations')
+        .select('*')
+        .eq('user_id', userId);
+        
+      if (error) throw error;
+      return (data || []).map(mapAutomationFromDB);
     },
-    save: (rules: AutomationRule[]) => localStorage.setItem('flowpilot_automations', JSON.stringify(rules))
+    create: async (rule: AutomationRule, userId: string) => {
+      const { error } = await supabase.from('automations').insert(mapAutomationToDB(rule, userId));
+      if (error) throw error;
+    },
+    update: async (rule: AutomationRule, userId: string) => {
+      const { error } = await supabase
+        .from('automations')
+        .update(mapAutomationToDB(rule, userId))
+        .eq('id', rule.id);
+      if (error) throw error;
+    },
+    delete: async (id: string) => {
+      const { error } = await supabase.from('automations').delete().eq('id', id);
+      if (error) throw error;
+    }
   },
+
   notifications: {
-     load: (): AppNotification[] => {
-        try {
-          const saved = localStorage.getItem('flowpilot_notifications');
-          return saved ? JSON.parse(saved) : INITIAL_NOTIFICATIONS;
-        } catch (e) {
-          return INITIAL_NOTIFICATIONS;
-        }
-     },
-     save: (notes: AppNotification[]) => localStorage.setItem('flowpilot_notifications', JSON.stringify(notes))
+    fetchAll: async (userId: string): Promise<AppNotification[]> => {
+      const { data, error } = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('user_id', userId)
+        .order('timestamp', { ascending: false });
+        
+      if (error) throw error;
+      return (data || []).map(mapNotificationFromDB);
+    },
+    create: async (note: AppNotification, userId: string) => {
+      const { error } = await supabase.from('notifications').insert(mapNotificationToDB(note, userId));
+      if (error) throw error;
+    },
+    update: async (note: AppNotification, userId: string) => {
+      const { error } = await supabase
+        .from('notifications')
+        .update(mapNotificationToDB(note, userId))
+        .eq('id', note.id);
+      if (error) throw error;
+    }
   }
 };
