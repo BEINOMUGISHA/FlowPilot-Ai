@@ -1,0 +1,7 @@
+{
+  "name": "FlowPilot AI",
+  "description": "Your day, automated. A lightweight, AI-powered operations assistant that removes daily friction by capturing tasks, prioritizing work, and tracking follow-ups.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
