@@ -1,5 +1,5 @@
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Task, AutomationRule, AppNotification, UserStats } from '../types';
 import { DB } from '../services/database';
 import { runAutomations } from '../services/automationEngine';
@@ -8,238 +8,148 @@ import { useAppContext } from '../contexts/AppContext';
 
 export const useAppLogic = () => {
   const { user } = useAppContext();
-  
-  // Initialize State (Empty, then fetched)
   const [tasks, setTasks] = useState<Task[]>([]);
   const [automations, setAutomations] = useState<AutomationRule[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Fetch Data on User Change
+  // Memoized Stats for Performance
+  const stats = useMemo((): UserStats => {
+    const today = new Date().toDateString();
+    const completedToday = tasks.filter(t => t.status === 'completed' && new Date(t.dueDate).toDateString() === today).length;
+    const pending = tasks.filter(t => t.status === 'pending');
+    
+    return {
+      pendingTasks: pending.length,
+      completedToday,
+      highPriority: pending.filter(t => t.priority === 'high').length,
+      productivityScore: Math.min(100, Math.round((completedToday / (tasks.length || 1)) * 100) + 20),
+      streak: completedToday > 0 ? 5 : 4
+    };
+  }, [tasks]);
+
+  // Initial Data Fetch
   useEffect(() => {
-    const loadData = async () => {
-      if (!user) {
-        setTasks([]);
-        setAutomations([]);
-        setNotifications([]);
-        return;
-      }
-
-      setLoading(true);
+    if (!user) return;
+    
+    const init = async () => {
+      setIsLoading(true);
       try {
-        const [loadedTasks, loadedRules, loadedNotes] = await Promise.all([
+        const [t, a, n] = await Promise.all([
           DB.tasks.fetchAll(user.id),
           DB.automations.fetchAll(user.id),
           DB.notifications.fetchAll(user.id)
         ]);
-        setTasks(loadedTasks);
-        setAutomations(loadedRules);
-        setNotifications(loadedNotes);
-      } catch (e) {
-        console.error("Failed to load app data", e);
+        setTasks(t);
+        setAutomations(a);
+        setNotifications(n);
+      } catch (err) {
+        console.error("Critical Sync Error", err);
       } finally {
-        setLoading(false);
+        setIsLoading(false);
       }
     };
-
-    loadData();
+    init();
   }, [user]);
 
-  // --- Automation Logic ---
-  const handleAutomationExecution = useCallback(async (result: { updatedTasks: Task[], newNotifications: AppNotification[], triggeredRules: string[] }) => {
-    // 1. Update Tasks locally and in DB
-    // Note: Diffing tasks to find which to update is complex here.
-    // For simplicity in this adaptation, we will rely on individual task updates triggering automations.
-    // However, the automation engine might modify multiple tasks.
-    // We will update local state immediately and assume the 'engine' only touched specific tasks, or batch update.
-    // Given Supabase usage, batch updates are trickier. 
-    // We will update local state for UI responsiveness. DB sync for automations is handled best by backend triggers, 
-    // but here we will just sync the specific changes if possible or assume optimistic UI is enough for now.
+  // Orchestrator for Automations (Side Effect Handler)
+  const processAutomations = useCallback(async (trigger: string, task?: Task) => {
+    if (!user) return;
+    const result = runAutomations(tasks, automations, trigger as any, task);
     
-    // In this specific flow, runAutomations returns a NEW array. We set that to state.
-    // BUT we need to persist these changes.
-    // Ideally, automation logic should call `updateTask` wrapper.
-    // For now, let's just update local state to reflect automation outcome in UI.
-    if (result.updatedTasks !== tasks) {
-      setTasks(result.updatedTasks);
-      
-      // Persist changes? This is the hard part of client-side automation + DB.
-      // We'll iterate and update modified tasks.
-      const modifiedTasks = result.updatedTasks.filter(t => {
-        const original = tasks.find(ot => ot.id === t.id);
-        return original && JSON.stringify(original) !== JSON.stringify(t);
-      });
-      
-      if (user) {
-         modifiedTasks.forEach(t => DB.tasks.update(t, user.id).catch(console.error));
-      }
-    }
-    
-    // 2. Add Notifications
-    if (result.newNotifications.length > 0) {
-      setNotifications(prev => [...result.newNotifications, ...prev]);
-      if (user) {
-         result.newNotifications.forEach(n => DB.notifications.create(n, user.id).catch(console.error));
-      }
-      
-      if (user?.soundEnabled) {
-         soundService.playNotification();
-      }
-    }
-
-    // 3. Update Rule Stats
     if (result.triggeredRules.length > 0) {
-      const updatedRules = automations.map(rule => {
-        if (result.triggeredRules.includes(rule.id)) {
-          return {
-            ...rule,
-            lastRun: new Date().toISOString(),
-            executionCount: rule.executionCount + 1
-          };
+      // 1. Sync Notifications
+      if (result.newNotifications.length > 0) {
+        setNotifications(prev => [...result.newNotifications, ...prev]);
+        result.newNotifications.forEach(n => DB.notifications.create(n, user.id));
+        if (user.soundEnabled) soundService.playNotification();
+      }
+
+      // 2. Sync Automation Execution Stats
+      const updatedRules = automations.map(r => {
+        if (result.triggeredRules.includes(r.id)) {
+          const u = { ...r, executionCount: r.executionCount + 1, lastRun: new Date().toISOString() };
+          DB.automations.update(u, user.id);
+          return u;
         }
-        return rule;
+        return r;
       });
       setAutomations(updatedRules);
-      
-      if (user) {
-        updatedRules
-          .filter(r => result.triggeredRules.includes(r.id))
-          .forEach(r => DB.automations.update(r, user.id).catch(console.error));
+
+      // 3. Sync Task Updates from Rules (e.g., auto-escalate priority)
+      if (JSON.stringify(result.updatedTasks) !== JSON.stringify(tasks)) {
+         setTasks(result.updatedTasks);
+         result.updatedTasks.forEach(t => {
+            const original = tasks.find(ot => ot.id === t.id);
+            if (original && JSON.stringify(original) !== JSON.stringify(t)) {
+                DB.tasks.update(t, user.id);
+            }
+         });
       }
     }
-  }, [tasks, automations, user]); 
-
-  // Timer for Overdue Checks
-  useEffect(() => {
-    if (!user) return;
-    const interval = setInterval(() => {
-      const result = runAutomations(tasks, automations, 'ON_OVERDUE');
-      handleAutomationExecution(result);
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [tasks, automations, handleAutomationExecution, user]);
-
-  // --- Public API (Controllers) ---
+  }, [tasks, automations, user]);
 
   const addTask = async (newTask: Task) => {
     if (!user) return;
-    // Optimistic Update
-    const newTaskList = [newTask, ...tasks];
-    setTasks(newTaskList);
-    
+    setTasks(prev => [newTask, ...prev]); // Optimistic
     try {
       await DB.tasks.create(newTask, user.id);
-      
-      // Trigger Automations
-      const result = runAutomations(newTaskList, automations, 'ON_CREATE', newTask);
-      const result2 = runAutomations(result.updatedTasks, automations, 'KEYWORD_MATCH', newTask);
-      
-      handleAutomationExecution({
-        updatedTasks: result2.updatedTasks,
-        newNotifications: [...result.newNotifications, ...result2.newNotifications],
-        triggeredRules: [...result.triggeredRules, ...result2.triggeredRules]
-      });
+      processAutomations('ON_CREATE', newTask);
+      processAutomations('KEYWORD_MATCH', newTask);
     } catch (e) {
-      console.error("Error creating task", e);
-      // Rollback? setTasks(tasks)
+      setTasks(prev => prev.filter(t => t.id !== newTask.id)); // Rollback
     }
   };
 
   const updateTask = async (updatedTask: Task) => {
     if (!user) return;
-    const newTaskList = tasks.map(t => t.id === updatedTask.id ? updatedTask : t);
-    setTasks(newTaskList);
+    const original = tasks.find(t => t.id === updatedTask.id);
+    setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
 
     try {
-        await DB.tasks.update(updatedTask, user.id);
-
-        if (updatedTask.status === 'completed') {
-           if (user.soundEnabled) {
-             soundService.playSuccess();
-           }
-           const result = runAutomations(newTaskList, automations, 'ON_COMPLETE', updatedTask);
-           handleAutomationExecution(result);
-        }
+      await DB.tasks.update(updatedTask, user.id);
+      if (updatedTask.status === 'completed' && original?.status !== 'completed') {
+        if (user.soundEnabled) soundService.playSuccess();
+        processAutomations('ON_COMPLETE', updatedTask);
+      }
     } catch (e) {
-        console.error("Error updating task", e);
+      if (original) setTasks(prev => prev.map(t => t.id === updatedTask.id ? original : t));
     }
-  };
-
-  const addAutomationRule = async (rule: AutomationRule) => {
-    if (!user) return;
-    setAutomations(prev => [rule, ...prev]);
-    try {
-      await DB.automations.create(rule, user.id);
-    } catch(e) { console.error(e); }
-  };
-
-  const toggleAutomation = async (id: string) => {
-    if (!user) return;
-    const rule = automations.find(a => a.id === id);
-    if (!rule) return;
-    
-    const updatedRule = { ...rule, active: !rule.active };
-    setAutomations(prev => prev.map(a => a.id === id ? updatedRule : a));
-    
-    try {
-      await DB.automations.update(updatedRule, user.id);
-    } catch(e) { console.error(e); }
-  };
-  
-  const deleteAutomation = async (id: string) => {
-    if (!user) return;
-    setAutomations(prev => prev.filter(a => a.id !== id));
-    try {
-      await DB.automations.delete(id);
-    } catch(e) { console.error(e); }
   };
 
   const markNotificationRead = async (id: string) => {
     if (!user) return;
-    const note = notifications.find(n => n.id === id);
-    if (note) {
-        // Optimistic delete/read
-        setNotifications(prev => prev.filter(n => n.id !== id));
-        // If we just want to mark read:
-        // const updated = { ...note, read: true };
-        // setNotifications(prev => prev.map(n => n.id === id ? updated : n));
-        // await DB.notifications.update(updated, user.id);
-        
-        // App logic was "dismiss" (delete from view), so let's maybe assume delete or mark read?
-        // Layout uses "markNotificationRead" but implementation was filter out. 
-        // We'll update DB to read=true or delete. Let's do update read=true for persistence sake, but remove from UI list.
-        try {
-            await DB.notifications.update({ ...note, read: true }, user.id);
-        } catch(e) { console.error(e); }
+    setNotifications(prev => prev.filter(n => n.id !== id));
+    try {
+      await DB.notifications.update({ id, read: true } as any, user.id);
+    } catch (e) {
+      // Silently fail or re-fetch on next load
     }
-  };
-
-  // Stats Logic
-  const getStats = (): UserStats => {
-    const completedToday = tasks.filter(t => t.status === 'completed' && new Date(t.dueDate).toDateString() === new Date().toDateString()).length;
-    // Streak simulation (could fetch from DB if we tracked history)
-    const streak = completedToday > 0 ? 5 : 4; 
-
-    return {
-        pendingTasks: tasks.filter(t => t.status === 'pending').length,
-        completedToday,
-        highPriority: tasks.filter(t => t.status === 'pending' && t.priority === 'high').length,
-        productivityScore: 78, // Placeholder
-        streak
-    };
   };
 
   return {
     tasks,
     automations,
     notifications,
-    stats: getStats(),
+    stats,
+    isLoading,
     addTask,
     updateTask,
-    addAutomationRule,
-    toggleAutomation,
-    deleteAutomation,
-    markNotificationRead,
-    loading
+    addAutomationRule: (r: AutomationRule) => {
+      setAutomations(prev => [r, ...prev]);
+      if (user) DB.automations.create(r, user.id);
+    },
+    toggleAutomation: (id: string) => {
+      const rule = automations.find(a => a.id === id);
+      if (!rule || !user) return;
+      const u = { ...rule, active: !rule.active };
+      setAutomations(prev => prev.map(a => a.id === id ? u : a));
+      DB.automations.update(u, user.id);
+    },
+    deleteAutomation: (id: string) => {
+      setAutomations(prev => prev.filter(a => a.id !== id));
+      DB.automations.delete(id);
+    },
+    markNotificationRead
   };
 };

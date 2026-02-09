@@ -6,13 +6,13 @@ import i18n from '../services/i18n';
 import { supabase } from '../services/supabaseClient';
 
 const defaultUser: UserProfile = {
-  id: '',
-  name: 'User',
-  email: '',
+  id: 'local-user',
+  name: 'Pilot',
+  email: 'pilot@flowpilot.ai',
   avatar: 'https://picsum.photos/id/64/100/100',
-  plan: 'free',
+  plan: 'pro',
   role: 'admin',
-  workspaceName: 'My Workspace',
+  workspaceName: 'Local Workspace',
   twoFactorEnabled: false,
   emailNotifications: true,
   soundEnabled: true,
@@ -20,11 +20,9 @@ const defaultUser: UserProfile = {
   theme: 'light'
 };
 
-// Mock Team Data (kept as mock for now unless a team_members table exists)
 const mockTeamMembers: TeamMember[] = [
   { id: 'u1', name: 'Alex Johnson', role: 'admin', avatar: 'https://picsum.photos/id/64/100/100', email: 'alex@flowpilot.ai' },
   { id: 'u2', name: 'Sarah Miller', role: 'member', avatar: 'https://picsum.photos/id/65/100/100', email: 'sarah@flowpilot.ai' },
-  { id: 'u3', name: 'David Chen', role: 'member', avatar: 'https://picsum.photos/id/91/100/100', email: 'david@flowpilot.ai' },
 ];
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -39,7 +37,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Auth & Profile Sync
   useEffect(() => {
-    // Check active session
+    if (!supabase) {
+      // Mock Auth Check
+      const localAuth = localStorage.getItem('flowpilot_auth');
+      if (localAuth === 'true') {
+        setIsAuthenticated(true);
+        const savedProfile = localStorage.getItem('flowpilot_profile');
+        setUser(savedProfile ? JSON.parse(savedProfile) : defaultUser);
+      }
+      return;
+    }
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
         setIsAuthenticated(true);
@@ -61,6 +69,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const fetchProfile = async (userId: string, email?: string) => {
+    if (!supabase) return;
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -68,12 +77,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .eq('id', userId)
         .single();
 
-      if (error && error.code !== 'PGRST116') {
-        console.error("Error fetching profile:", error);
-      }
-
       if (data) {
-        // Map DB snake_case to UserProfile camelCase
         setUser({
           id: data.id,
           name: data.name || email?.split('@')[0] || 'User',
@@ -89,8 +93,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           theme: data.theme || 'light'
         });
       } else if (email) {
-        // Create profile if missing (first login)
-        const newProfile = { ...defaultUser, id: userId, email };
         const { error: insertError } = await supabase.from('profiles').insert({
           id: userId,
           email,
@@ -101,22 +103,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           language: 'en',
           theme: 'light'
         });
-        
-        if (!insertError) setUser(newProfile);
+        if (!insertError) setUser({ ...defaultUser, id: userId, email });
       }
     } catch (e) {
       console.error("Profile sync error", e);
     }
   };
 
-  // Sync i18n with user state
-  useEffect(() => {
-    if (user && user.language && i18n.language !== user.language) {
-      i18n.changeLanguage(user.language);
-    }
-  }, [user]);
-
-  // Theme Logic
   useEffect(() => {
     const currentTheme = user?.theme || 'light';
     const root = window.document.documentElement;
@@ -127,21 +120,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [user?.theme]);
 
-  // Network Listeners
-  useEffect(() => {
-    const handleOnline = () => setIsOffline(false);
-    const handleOffline = () => setIsOffline(true);
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
-
   const login = async (creds: AuthCredentials) => {
+    if (!supabase) {
+      // Mock Login
+      setIsAuthenticated(true);
+      setUser(defaultUser);
+      localStorage.setItem('flowpilot_auth', 'true');
+      localStorage.setItem('flowpilot_profile', JSON.stringify(defaultUser));
+      return;
+    }
     const { error } = await supabase.auth.signInWithPassword({
       email: creds.email,
       password: creds.password,
@@ -150,30 +137,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const register = async (creds: AuthCredentials) => {
+    if (!supabase) {
+      // Mock Register
+      setIsAuthenticated(true);
+      const newUser = { ...defaultUser, name: creds.name || 'Pilot', email: creds.email };
+      setUser(newUser);
+      localStorage.setItem('flowpilot_auth', 'true');
+      localStorage.setItem('flowpilot_profile', JSON.stringify(newUser));
+      return;
+    }
     const { error } = await supabase.auth.signUp({
       email: creds.email,
       password: creds.password,
-      options: {
-        data: {
-          name: creds.name,
-        },
-      },
+      options: { data: { name: creds.name } },
     });
     if (error) throw error;
-    // Profile creation handled by onAuthStateChange effect or Database Trigger
   };
 
   const logout = async () => {
+    if (!supabase) {
+      setIsAuthenticated(false);
+      setUser(null);
+      localStorage.removeItem('flowpilot_auth');
+      return;
+    }
     await supabase.auth.signOut();
-    document.documentElement.classList.remove('dark');
   };
 
   const updateUser = async (updates: Partial<UserProfile>) => {
     if (user) {
       const updatedUser = { ...user, ...updates };
-      setUser(updatedUser); // Optimistic
+      setUser(updatedUser);
+      
+      if (!supabase) {
+        localStorage.setItem('flowpilot_profile', JSON.stringify(updatedUser));
+        return;
+      }
 
-      // Sync to DB
       const dbUpdates = {
         name: updatedUser.name,
         avatar: updatedUser.avatar,
@@ -187,54 +187,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         theme: updatedUser.theme
       };
 
-      const { error } = await supabase
-        .from('profiles')
-        .update(dbUpdates)
-        .eq('id', user.id);
-        
-      if (error) console.error("Failed to update profile", error);
+      await supabase.from('profiles').update(dbUpdates).eq('id', user.id);
     }
   };
 
-  // Team Logic (Mocked for now, simplified for this integration)
-  const addTeamMember = (member: TeamMember) => {
-    setTeamMembers(prev => [...prev, member]);
-  };
-  const updateTeamMember = (id: string, updates: Partial<TeamMember>) => {
+  const addTeamMember = (member: TeamMember) => setTeamMembers(prev => [...prev, member]);
+  const updateTeamMember = (id: string, updates: Partial<TeamMember>) => 
     setTeamMembers(prev => prev.map(m => m.id === id ? { ...m, ...updates } : m));
-  };
-  const removeTeamMember = (id: string) => {
-    setTeamMembers(prev => prev.filter(m => m.id !== id));
-  };
-
+  const removeTeamMember = (id: string) => setTeamMembers(prev => prev.filter(m => m.id !== id));
   const setLanguage = (lang: Language) => {
     updateUser({ language: lang });
     i18n.changeLanguage(lang);
   };
-
   const toggleTheme = () => {
-    if (user) {
-      const newTheme: Theme = user.theme === 'dark' ? 'light' : 'dark';
-      updateUser({ theme: newTheme });
-    }
+    if (user) updateUser({ theme: user.theme === 'dark' ? 'light' : 'dark' });
   };
 
   return (
     <AppContext.Provider value={{ 
-      user, 
-      isAuthenticated, 
-      login, 
-      register, 
-      logout,
-      teamMembers, 
-      addTeamMember,
-      updateTeamMember,
-      removeTeamMember,
-      updateUser, 
-      isOffline, 
-      language: user?.language || 'en', 
-      setLanguage,
-      toggleTheme
+      user, isAuthenticated, login, register, logout, teamMembers, 
+      addTeamMember, updateTeamMember, removeTeamMember, updateUser, 
+      isOffline, language: user?.language || 'en', setLanguage, toggleTheme
     }}>
       {children}
     </AppContext.Provider>

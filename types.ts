@@ -4,26 +4,30 @@ export type TaskStatus = 'pending' | 'in-progress' | 'completed';
 export type TaskSource = 'manual' | 'voice' | 'email' | 'text';
 export type UserRole = 'admin' | 'member';
 
+export type TaskID = string;
+export type UserID = string;
+export type ISODate = string;
+
 export interface AuthCredentials {
   email: string;
   password: string;
-  name?: string; // For registration
+  name?: string;
 }
 
 export interface Task {
-  id: string;
+  id: TaskID;
   title: string;
   status: TaskStatus;
   priority: Priority;
-  dueDate: string; // ISO string
-  category?: string;
+  dueDate: ISODate;
+  category: string;
   source: TaskSource;
   description?: string;
   aiConfidence?: number;
-  assignedTo?: string; // userId
+  assignedTo?: UserID;
+  createdAt?: ISODate;
 }
 
-// Automation Types
 export type TriggerType = 'ON_CREATE' | 'ON_COMPLETE' | 'ON_OVERDUE' | 'KEYWORD_MATCH';
 export type ActionType = 'NOTIFY' | 'SET_PRIORITY' | 'ASSIGN_USER' | 'DELETE';
 
@@ -32,11 +36,11 @@ export interface AutomationRule {
   name: string;
   description: string;
   triggerType: TriggerType;
-  triggerCondition?: string; // e.g., keyword for KEYWORD_MATCH, or 'high' for priority
+  triggerCondition?: string;
   actionType: ActionType;
-  actionTarget?: string; // e.g. 'high' for SET_PRIORITY or message for NOTIFY
+  actionTarget?: string;
   active: boolean;
-  lastRun?: string;
+  lastRun?: ISODate;
   executionCount: number;
 }
 
@@ -45,36 +49,26 @@ export interface UserStats {
   completedToday: number;
   highPriority: number;
   productivityScore: number;
-  streak: number; // Viral Feature: Daily Streak
+  streak: number;
 }
 
 export interface AppNotification {
   id: string;
   type: 'email' | 'social' | 'system' | 'automation';
-  source: string; // e.g. 'Gmail', 'Slack', 'LinkedIn', 'FlowPilot'
+  source: string;
   title: string;
   message: string;
-  timestamp: string;
+  timestamp: ISODate;
   read: boolean;
   priority?: 'high' | 'normal';
 }
-
-export interface GeminiTaskParseResponse {
-  title: string;
-  priority: Priority;
-  dueDate?: string;
-  category?: string;
-  description?: string;
-}
-
-// --- New Types for Settings & Subscriptions ---
 
 export type Language = 'en' | 'es' | 'fr' | 'zh' | 'hi' | 'pt';
 export type SubscriptionPlan = 'free' | 'pro' | 'team';
 export type Theme = 'light' | 'dark';
 
 export interface UserProfile {
-  id: string;
+  id: UserID;
   name: string;
   email: string;
   avatar: string;
@@ -83,13 +77,13 @@ export interface UserProfile {
   workspaceName?: string;
   twoFactorEnabled: boolean;
   emailNotifications?: boolean;
-  soundEnabled: boolean; // Sound Alerts Feature
+  soundEnabled: boolean;
   language: Language;
   theme: Theme;
 }
 
 export interface TeamMember {
-  id: string;
+  id: UserID;
   name: string;
   role: UserRole;
   avatar: string;
@@ -104,8 +98,8 @@ export interface AppContextType {
   logout: () => void;
   teamMembers: TeamMember[];
   addTeamMember: (member: TeamMember) => void;
-  updateTeamMember: (id: string, updates: Partial<TeamMember>) => void;
-  removeTeamMember: (id: string) => void;
+  updateTeamMember: (id: UserID, updates: Partial<TeamMember>) => void;
+  removeTeamMember: (id: UserID) => void;
   updateUser: (updates: Partial<UserProfile>) => void;
   isOffline: boolean;
   language: Language;
